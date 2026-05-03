@@ -237,57 +237,249 @@
   function refreshCalendar() {
     syncControls();
     els.calendarGrid.setAttribute("aria-busy", "true");
-    Promise.all([fetchMonthDays(), fetchShampooPlan()])
-      .then(function (results) {
-        state.monthDays = results[0].days || [];
-        state.shampooDays = results[1].shampooDays || [];
-        renderCalendar();
-        renderDayDetails();
-      })
-      .catch(function () {
-        renderError("无法读取日历数据，请确认 Java 服务正在运行。");
-      })
-      .then(function () {
-        els.calendarGrid.removeAttribute("aria-busy");
+    state.monthDays = getMonthDays(state.year, state.month);
+    state.shampooDays = planShampooDays(state.events);
+    renderCalendar();
+    renderDayDetails();
+    els.calendarGrid.removeAttribute("aria-busy");
+  }
+
+  function getMonthDays(year, month) {
+    var days = [];
+    if (year < MIN_YEAR || year > MAX_YEAR || month < 1 || month > 12) {
+      return days;
+    }
+    var date = new Date(Date.UTC(year, month - 1, 1));
+    while (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1) {
+      var dateKey = formatDateKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+      var isoDayOfWeek = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+      days.push({
+        date: dateKey,
+        day: date.getUTCDate(),
+        dayOfWeek: isoDayOfWeek,
+        weekend: isoDayOfWeek === 6 || isoDayOfWeek === 7
       });
+      date.setUTCDate(date.getUTCDate() + 1);
+    }
+    return days;
   }
 
-  function fetchMonthDays() {
-    return fetchJson("/api/dates?year=" + encodeURIComponent(state.year) + "&month=" + encodeURIComponent(state.month));
-  }
+  function planShampooDays(events) {
+    var baseIntervalDays = normalizeBaseInterval(state.baseIntervalDays);
+    var minusFlexIntervalDays = normalizeFlexInterval(state.minusFlexIntervalDays);
+    var plusFlexIntervalDays = normalizeFlexInterval(state.plusFlexIntervalDays);
+    var minIntervalDays = Math.max(1, baseIntervalDays - minusFlexIntervalDays);
+    var maxIntervalDays = baseIntervalDays + plusFlexIntervalDays;
+    var eventsByPreparationDay = buildPreparationMap(events);
+    var anchorDays = selectPriorityAnchors(eventsByPreparationDay, minIntervalDays);
+    var shampooDaySet = {};
+    var shampooDays = [];
 
-  function fetchShampooPlan() {
-    var payload = new URLSearchParams();
-    payload.set("baseIntervalDays", String(state.baseIntervalDays));
-    payload.set("minusFlexIntervalDays", String(state.minusFlexIntervalDays));
-    payload.set("plusFlexIntervalDays", String(state.plusFlexIntervalDays));
-    payload.set("flexIntervalDays", String(state.plusFlexIntervalDays));
-    payload.set("intervalDays", String(state.baseIntervalDays));
-    payload.set("events", state.events.map(function (event) {
-      return event.date + "|" + normalizeImportance(event.importance) + "|" + event.title.replace(/\r?\n/g, " ").trim();
-    }).join("\n"));
+    if (!anchorDays.length) {
+      addRoutineDays(shampooDaySet, dateToDayNumber(MIN_DATE), dateToDayNumber(MAX_DATE), baseIntervalDays);
+    } else {
+      addAnchoredPlan(shampooDaySet, anchorDays, baseIntervalDays, minIntervalDays, maxIntervalDays);
+    }
 
-    return fetch("/api/plan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-      },
-      body: payload.toString()
-    }).then(function (response) {
-      if (!response.ok) {
-        throw new Error("Plan API failed");
-      }
-      return response.json();
+    Object.keys(shampooDaySet).forEach(function (dayText) {
+      shampooDays.push(Number(dayText));
+    });
+    shampooDays.sort(function (left, right) {
+      return left - right;
+    });
+
+    return shampooDays.map(function (dayNumber) {
+      var relatedEvents = eventsByPreparationDay[dayNumber] || [];
+      return {
+        date: dayNumberToDate(dayNumber),
+        type: relatedEvents.length ? "event-prep" : "routine",
+        label: relatedEvents.length ? "重要事项前一天" : "间隔维护",
+        relatedEvents: relatedEvents.map(function (event) {
+          return {
+            date: event.date,
+            title: event.title,
+            importance: normalizeImportance(event.importance),
+            importanceLabel: importanceLabel(event.importance)
+          };
+        })
+      };
     });
   }
 
-  function fetchJson(url) {
-    return fetch(url).then(function (response) {
-      if (!response.ok) {
-        throw new Error("Request failed");
+  function buildPreparationMap(events) {
+    var map = {};
+    events.forEach(function (event) {
+      if (!event || !isSupportedDate(event.date)) {
+        return;
       }
-      return response.json();
+      var preparationDay = dateToDayNumber(event.date) - 1;
+      if (!isSupportedDayNumber(preparationDay)) {
+        return;
+      }
+      if (!map[preparationDay]) {
+        map[preparationDay] = [];
+      }
+      map[preparationDay].push({
+        date: event.date,
+        title: event.title,
+        importance: normalizeImportance(event.importance)
+      });
     });
+    Object.keys(map).forEach(function (dayNumber) {
+      map[dayNumber].sort(compareByDate);
+    });
+    return map;
+  }
+
+  function selectPriorityAnchors(eventsByPreparationDay, minIntervalDays) {
+    var selectedAnchors = [];
+    addAnchorsByImportance(selectedAnchors, eventsByPreparationDay, "very-important", minIntervalDays);
+    addAnchorsByImportance(selectedAnchors, eventsByPreparationDay, "normal", minIntervalDays);
+    addAnchorsByImportance(selectedAnchors, eventsByPreparationDay, "low", minIntervalDays);
+    return selectedAnchors.sort(function (left, right) {
+      return left - right;
+    });
+  }
+
+  function addAnchorsByImportance(selectedAnchors, eventsByPreparationDay, targetImportance, minIntervalDays) {
+    Object.keys(eventsByPreparationDay).map(Number).sort(function (left, right) {
+      return left - right;
+    }).forEach(function (dayNumber) {
+      if (!hasImportance(eventsByPreparationDay[dayNumber], targetImportance)) {
+        return;
+      }
+      if (keepsDistanceFromSelected(dayNumber, selectedAnchors, minIntervalDays)) {
+        selectedAnchors.push(dayNumber);
+        selectedAnchors.sort(function (left, right) {
+          return left - right;
+        });
+      }
+    });
+  }
+
+  function hasImportance(events, targetImportance) {
+    return events.some(function (event) {
+      return normalizeImportance(event.importance) === targetImportance;
+    });
+  }
+
+  function keepsDistanceFromSelected(dayNumber, selectedAnchors, minIntervalDays) {
+    for (var i = 0; i < selectedAnchors.length; i++) {
+      if (Math.abs(selectedAnchors[i] - dayNumber) < minIntervalDays) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function addRoutineDays(shampooDaySet, startDay, endDay, intervalDays) {
+    for (var day = startDay; day <= endDay; day += intervalDays) {
+      shampooDaySet[day] = true;
+    }
+  }
+
+  function addAnchoredPlan(shampooDaySet, anchorDays, baseIntervalDays, minIntervalDays, maxIntervalDays) {
+    var startDay = dateToDayNumber(MIN_DATE);
+    var endDay = dateToDayNumber(MAX_DATE);
+    var firstAnchor = anchorDays[0];
+
+    for (var day = firstAnchor; day >= startDay; day -= baseIntervalDays) {
+      shampooDaySet[day] = true;
+    }
+
+    for (var i = 0; i < anchorDays.length; i++) {
+      shampooDaySet[anchorDays[i]] = true;
+      if (i > 0) {
+        addIntervalDaysBetween(shampooDaySet, anchorDays[i - 1], anchorDays[i], baseIntervalDays, minIntervalDays, maxIntervalDays);
+      }
+    }
+
+    var lastAnchor = anchorDays[anchorDays.length - 1];
+    for (var nextDay = lastAnchor + baseIntervalDays; nextDay <= endDay; nextDay += baseIntervalDays) {
+      shampooDaySet[nextDay] = true;
+    }
+  }
+
+  function addIntervalDaysBetween(shampooDaySet, previousDay, nextDay, baseIntervalDays, minIntervalDays, maxIntervalDays) {
+    var gap = nextDay - previousDay;
+    if (gap <= maxIntervalDays) {
+      return;
+    }
+
+    var segments = chooseSegmentCount(gap, baseIntervalDays, minIntervalDays, maxIntervalDays);
+    if (segments <= 1) {
+      addBaseSteppedDaysBetween(shampooDaySet, previousDay, nextDay, baseIntervalDays);
+      return;
+    }
+
+    var intervalLengths = buildIntervalLengths(gap, segments, baseIntervalDays, minIntervalDays, maxIntervalDays);
+    var currentDay = previousDay;
+    for (var i = 0; i < intervalLengths.length - 1; i++) {
+      currentDay += intervalLengths[i];
+      if (currentDay > previousDay && currentDay < nextDay) {
+        shampooDaySet[currentDay] = true;
+      }
+    }
+  }
+
+  function addBaseSteppedDaysBetween(shampooDaySet, previousDay, nextDay, baseIntervalDays) {
+    for (var day = previousDay + baseIntervalDays; day < nextDay; day += baseIntervalDays) {
+      shampooDaySet[day] = true;
+    }
+  }
+
+  function chooseSegmentCount(gap, baseIntervalDays, minIntervalDays, maxIntervalDays) {
+    var minSegments = Math.ceil(gap / maxIntervalDays);
+    var maxSegments = Math.floor(gap / minIntervalDays);
+    var bestSegments = -1;
+    var bestAdjustedSegments = Number.MAX_SAFE_INTEGER;
+    var bestDeviation = Number.MAX_SAFE_INTEGER;
+    var bestDirection = -1;
+
+    for (var segments = minSegments; segments <= maxSegments; segments++) {
+      var diff = gap - segments * baseIntervalDays;
+      var capacity = diff >= 0 ? maxIntervalDays - baseIntervalDays : baseIntervalDays - minIntervalDays;
+      if (diff !== 0 && capacity === 0) {
+        continue;
+      }
+      var deviation = Math.abs(diff);
+      var adjustedSegments = capacity === 0 ? 0 : Math.ceil(deviation / capacity);
+      var direction = diff >= 0 ? 1 : 0;
+      if (adjustedSegments < bestAdjustedSegments
+          || (adjustedSegments === bestAdjustedSegments && deviation < bestDeviation)
+          || (adjustedSegments === bestAdjustedSegments && deviation === bestDeviation && direction > bestDirection)) {
+        bestSegments = segments;
+        bestAdjustedSegments = adjustedSegments;
+        bestDeviation = deviation;
+        bestDirection = direction;
+      }
+    }
+
+    return bestSegments;
+  }
+
+  function buildIntervalLengths(gap, segments, baseIntervalDays, minIntervalDays, maxIntervalDays) {
+    var intervalLengths = [];
+    for (var i = 0; i < segments; i++) {
+      intervalLengths.push(baseIntervalDays);
+    }
+
+    var extraDays = gap - segments * baseIntervalDays;
+    var direction = extraDays >= 0 ? 1 : -1;
+    var remaining = Math.abs(extraDays);
+    var index = 0;
+    while (remaining > 0 && index < intervalLengths.length * 7) {
+      var intervalIndex = index % intervalLengths.length;
+      if (direction > 0 && intervalLengths[intervalIndex] < maxIntervalDays) {
+        intervalLengths[intervalIndex]++;
+        remaining--;
+      } else if (direction < 0 && intervalLengths[intervalIndex] > minIntervalDays) {
+        intervalLengths[intervalIndex]--;
+        remaining--;
+      }
+      index++;
+    }
+    return intervalLengths;
   }
 
   function renderCalendar() {
@@ -718,6 +910,28 @@
     return "每 " + minIntervalDays + "-" + maxIntervalDays + " 天（" + state.baseIntervalDays + " -" + state.minusFlexIntervalDays + "/+" + state.plusFlexIntervalDays + "）";
   }
 
+  function normalizeBaseInterval(value) {
+    var interval = Number(value);
+    if (!isFinite(interval) || interval < 1) {
+      return 1;
+    }
+    if (interval > 14) {
+      return 14;
+    }
+    return Math.floor(interval);
+  }
+
+  function normalizeFlexInterval(value) {
+    var interval = Number(value);
+    if (!isFinite(interval) || interval < 0) {
+      return 0;
+    }
+    if (interval > 7) {
+      return 7;
+    }
+    return Math.floor(interval);
+  }
+
   function renderError(message) {
     clear(els.calendarGrid);
     var error = document.createElement("div");
@@ -734,6 +948,19 @@
 
   function isSupportedDate(date) {
     return typeof date === "string" && date >= MIN_DATE && date <= MAX_DATE;
+  }
+
+  function isSupportedDayNumber(dayNumber) {
+    return dayNumber >= dateToDayNumber(MIN_DATE) && dayNumber <= dateToDayNumber(MAX_DATE);
+  }
+
+  function dateToDayNumber(date) {
+    return Math.floor(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) / 86400000);
+  }
+
+  function dayNumberToDate(dayNumber) {
+    var date = new Date(dayNumber * 86400000);
+    return formatDateKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
   }
 
   function monthPrefix(year, month) {
