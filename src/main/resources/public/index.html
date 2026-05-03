@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shampoo Calendar</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">SC</div>
+        <div>
+          <p class="eyebrow">2026-2036 智能洗头日历</p>
+          <h1>Shampoo Calendar</h1>
+        </div>
+      </div>
+      <div class="range-note">2026-2036 日期范围</div>
+    </header>
+
+    <main class="workspace">
+      <section class="calendar-panel" aria-label="日历">
+        <div class="calendar-toolbar">
+          <div class="month-controls">
+            <button class="icon-button" id="prevMonth" type="button" aria-label="上个月" title="上个月">‹</button>
+            <div class="month-title" id="monthTitle">2026 年 1 月</div>
+            <button class="icon-button" id="nextMonth" type="button" aria-label="下个月" title="下个月">›</button>
+          </div>
+          <div class="jump-controls">
+            <label>
+              <span>年份</span>
+              <select id="yearSelect"></select>
+            </label>
+            <label>
+              <span>月份</span>
+              <select id="monthSelect"></select>
+            </label>
+          </div>
+        </div>
+
+        <div class="weekdays" aria-hidden="true">
+          <span>一</span>
+          <span>二</span>
+          <span>三</span>
+          <span>四</span>
+          <span>五</span>
+          <span>六</span>
+          <span>日</span>
+        </div>
+        <div class="calendar-grid" id="calendarGrid" aria-live="polite"></div>
+      </section>
+
+      <aside class="side-panel" aria-label="设置和详情">
+        <section class="visual-card">
+          <img src="/assets/calendar-bloom.svg" alt="" aria-hidden="true">
+          <div>
+            <h2>柔和安排，清爽节奏</h2>
+          </div>
+        </section>
+
+        <section class="control-card">
+          <div class="section-heading">
+            <h2>洗头间隔</h2>
+            <span id="intervalReadout">每 2-3 天</span>
+          </div>
+          <label class="range-field">
+            <span>基础天数</span>
+            <input id="baseIntervalInput" type="range" min="1" max="7" step="1" value="2">
+          </label>
+          <div class="interval-options" aria-hidden="true">
+            <span>1</span>
+            <span>2</span>
+            <span>3</span>
+            <span>4</span>
+            <span>5</span>
+            <span>6</span>
+            <span>7</span>
+          </div>
+          <label class="range-field flex-field">
+            <span>可提前 - 天数</span>
+            <input id="minusFlexIntervalInput" type="range" min="0" max="3" step="1" value="0">
+          </label>
+          <div class="flex-options" aria-hidden="true">
+            <span>-0</span>
+            <span>-1</span>
+            <span>-2</span>
+            <span>-3</span>
+          </div>
+          <label class="range-field flex-field">
+            <span>可延后 + 天数</span>
+            <input id="plusFlexIntervalInput" type="range" min="0" max="3" step="1" value="1">
+          </label>
+          <div class="flex-options" aria-hidden="true">
+            <span>+0</span>
+            <span>+1</span>
+            <span>+2</span>
+            <span>+3</span>
+          </div>
+        </section>
+
+        <section class="control-card">
+          <div class="section-heading">
+            <h2>添加重要事项</h2>
+          </div>
+          <form id="eventForm" class="event-form">
+            <label>
+              <span>日期</span>
+              <input id="eventDate" type="date" min="2026-01-01" max="2036-12-31" required>
+            </label>
+            <label>
+              <span>事项名称</span>
+              <input id="eventTitle" type="text" maxlength="48" placeholder="例如：参加会议、约会、面试" required>
+            </label>
+            <label>
+              <span>重要等级</span>
+              <select id="eventImportance" required>
+                <option value="very-important">非常重要</option>
+                <option value="normal" selected>一般</option>
+                <option value="low">不太重要</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit">添加事项</button>
+          </form>
+        </section>
+
+        <section class="control-card detail-card">
+          <div class="section-heading">
+            <h2 id="selectedDateTitle">日期详情</h2>
+          </div>
+          <div id="dayDetails" class="empty-state">暂无日期详情。</div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="eventContextMenu" class="context-menu" hidden>
+    <div class="context-menu-label">修改重要等级</div>
+    <button class="importance-menu-item" type="button" data-importance="very-important">非常重要</button>
+    <button class="importance-menu-item" type="button" data-importance="normal">一般</button>
+    <button class="importance-menu-item" type="button" data-importance="low">不太重要</button>
+    <div class="context-menu-divider" aria-hidden="true"></div>
+    <button id="deleteEventFromMenu" type="button">删除事项</button>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
